@@ -12,3 +12,5 @@ Intro to AI agents
 [Function Calling](https://developers.openai.com/api/docs/guides/function-calling) Guide - Understanding function calling in LLMs
 
 [RAG Best Practices]() - Guide to implementing effective RAG
+
+[Agentic Rag](https://weaviate.io/blog/what-is-agentic-rag) - What Is Agentic RAG? From LLM RAG to AI Agents
