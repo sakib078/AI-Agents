@@ -1,0 +1,3 @@
+
+https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server
+https://docs.langchain.com/oss/python/integrations/chat/groq
