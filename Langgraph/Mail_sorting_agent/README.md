@@ -4,6 +4,9 @@ A small **LangGraph** agent that reads unread Gmail, uses a **Groq LLM** to clas
 email (spam vs. category), and **drafts a reply** for legitimate mail — leaving the draft in
 Gmail for you to review and send.
 
+> 💬 **Chat UI:** there's now a Chainlit chat interface where you drive the agent in natural
+> language and call tools on demand. Run `chainlit run app.py -w` — see **[UI_PLAN.md](UI_PLAN.md)**.
+
 ```
           ┌─────────────┐     ┌──────────────────┐
  START ─▶ │ read_email  │ ──▶ │ categorize_email │ ──┐  (LLM: spam? category?)
