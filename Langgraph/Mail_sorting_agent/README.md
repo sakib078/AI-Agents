@@ -1,116 +1,58 @@
-# 📧 Email Processing Agent (LangGraph + Gmail)
+# 📧 Mail Sorting Agent
 
-A small **LangGraph** agent that reads unread Gmail, uses a **Groq LLM** to classify each
-email (spam vs. category), and **drafts a reply** for legitimate mail — leaving the draft in
-Gmail for you to review and send.
+A **LangGraph + Groq** email agent for Gmail, with a **Chainlit chat UI**. Chat in plain
+English to search your inbox, classify mail (spam / category), and draft replies — the agent
+calls the right tool for you, or runs the whole workflow on command. **Draft-only: nothing is
+ever sent automatically.**
 
-> 💬 **Chat UI:** there's now a Chainlit chat interface where you drive the agent in natural
-> language and call tools on demand. Run `chainlit run app.py -w` — see **[UI_PLAN.md](UI_PLAN.md)**.
+![Chat UI](UI.png)
 
+## Features
+- 💬 **Chat interface** — natural-language control, with each tool call shown as a step.
+- 🛠️ **Tool-calling** — invoke tools on demand ("classify email &lt;id&gt;") or let the agent chain them.
+- 🔁 **Full workflow** — "run the workflow on my 5 newest unread" → read → classify → draft.
+- 🧠 **Groq LLM** (`llama-3.3-70b-versatile`) for classification and reply drafting.
+- 🔒 **Safe by design** — scopes limited to `readonly` + `compose`; creates drafts only.
+
+## Quickstart (uv)
+
+```bash
+cd Langgraph/Mail_sorting_agent
+uv venv --python 3.14
+uv pip install -r requirements.txt
+uv run chainlit run app.py -w      # → http://localhost:8000
 ```
-          ┌─────────────┐     ┌──────────────────┐
- START ─▶ │ read_email  │ ──▶ │ categorize_email │ ──┐  (LLM: spam? category?)
-          └─────────────┘     └──────────────────┘   │
-                                                      ▼
-                                              route_email()
-                                is_spam? ──yes──▶ report_spam_reason ─▶ END
-                                    │
-                                    └──no──▶ draft_email_response ─▶ send_email_response ─▶ END
-                                              (LLM writes reply)      (creates Gmail draft)
-```
 
----
+Prerequisites in this folder / repo root:
+- **`credentials.json`** — Google OAuth Desktop client (first run opens a browser once; caches `token.json`).
+- **`GROQ_API_KEY`** in the repo-root `.env` (see `.env.example`).
 
-## The Gmail integration story (MCP → direct API)
+`credentials.json`, `token.json`, and `.env` are git-ignored — never commit them. Google Cloud
+setup steps are in [docs/learning.md](docs/learning.md).
 
-This project was **meant** to talk to Gmail through the hosted **Google Gmail MCP server**
-(`https://gmailmcp.googleapis.com/mcp/v1`) via `langchain-mcp-adapters`. That path is
-implemented and correct, but it is currently **blocked by a preview gate**, so the notebook
-now uses the **direct Gmail REST API** instead. Here is the full journey, so nothing is lost.
+## The tools
+| Tool | What it does |
+|------|--------------|
+| `search_inbox(query, max_results)` | list messages matching a Gmail query |
+| `read_email(message_id)` | full sender / subject / body |
+| `classify_email(message_id)` | spam? + category + reason |
+| `draft_reply(message_id)` | write a reply → save a Gmail **draft** |
+| `run_email_workflow(max_results)` | full pipeline over unread mail |
 
-### Attempt 1 — Hosted Gmail MCP server (blocked)
-
-- **What it is:** Google's remote MCP server that exposes Gmail as MCP tools
-  (`search_threads`, `get_thread`, `create_draft`, `apply_sensitive_message_label`, …).
-- **What we set up correctly:**
-  - Enabled **both** `gmail.googleapis.com` and `gmailmcp.googleapis.com` in the Cloud project.
-  - OAuth consent screen with scopes `gmail.readonly` + `gmail.compose`, self as a test user.
-  - A valid OAuth access token (auto-refreshed) sent as `Authorization: Bearer <token>`.
-- **The wall:** every tool call returned **`"The caller does not have permission"`**.
-  We proved this was **not** a code/token/scope problem — the *same token* calls the plain
-  Gmail REST API successfully. The blocker is that the hosted Gmail MCP server is a
-  **Google Workspace Developer Preview** feature and requires enrollment in the
-  [Developer Preview Program](https://developers.google.com/workspace/preview).
-- **Catch:** the preview program generally needs a **Google Workspace** account; a personal
-  `@gmail.com` typically cannot enroll. So this path is on hold.
-
-**Real Gmail MCP tool schema** (kept here for when the preview is available). It is
-thread-based and uses camelCase args; results come back as MCP content blocks
-(unwrap the text → `json.loads`):
-
-| Tool | Key args | Returns |
-|------|----------|---------|
-| `search_threads` | `query` (Gmail syntax), `pageSize` | `{ threads: [{ id, messages:[…] }] }` |
-| `get_thread` | `threadId`, `messageFormat="FULL_CONTENT"` | messages with `sender, subject, plaintextBody, snippet, id` |
-| `create_draft` | `to` (**array** of bare emails), `subject`, `body`, `replyToMessageId` | created draft (⚠️ **no send tool — draft only**) |
-| `apply_sensitive_message_label` | `messageId`, `labelOption="SPAM"\|"TRASH"` | — |
-
-### Attempt 2 — Direct Gmail REST API (current, working) ✅
-
-Same OAuth credentials, no preview needed. The notebook builds a Gmail service with
-`googleapiclient.discovery.build("gmail", "v1", credentials=...)` and uses three tiny helpers:
-
-| Helper | Gmail API call |
-|--------|----------------|
-| `list_unread(max_results)` | `users().messages().list(q="is:unread -in:chats")` |
-| `get_email(msg_id)` | `users().messages().get(format="full")` → flatten to `{sender, subject, body, …}` |
-| `create_draft_reply(to, subject, body, thread_id)` | `users().drafts().create(...)` (threaded, base64 raw MIME) |
-
-The LangGraph workflow (state, nodes, routing, LLM classification) is **identical** across
-both approaches — only the ~3 Gmail calls differ.
-
----
-
-## Setup
-
-### 1. Google Cloud (one time)
-1. **Enable the Gmail API** — APIs & Services → Library → *Gmail API* → **Enable**.
-2. **OAuth consent screen** — add scopes
-   `https://www.googleapis.com/auth/gmail.readonly` and
-   `https://www.googleapis.com/auth/gmail.compose`; add yourself as a **test user**.
-3. **Credentials** → Create OAuth client ID → **Desktop app** → download JSON,
-   rename to **`credentials.json`**, place it in this folder (next to `workflow.ipynb`).
-
-### 2. Environment
-Copy `.env.example` → repo-root `.env` and set:
-- `GROQ_API_KEY` — required (LLM).
-- `LANGFUSE_*` — optional (tracing).
-
-`.env`, `credentials.json`, and `token.json` are all **gitignored** — never commit them.
-
-### 3. Run
-Open `workflow.ipynb` and run top-to-bottom. On first run the auth cell opens a browser
-once for consent and caches **`token.json`** (auto-refreshed afterwards). The auth cell
-prints the account it connected to.
-
-> **Note (Windows / Python 3.14):** the notebook kernel is Python 3.14. After the first
-> `pip install`, **restart the kernel** so freshly installed packages load.
-
----
-
-## Behavior & safety
-- **Draft-only:** replies are created as Gmail **drafts** — nothing is sent automatically.
-- **Spam is non-destructive:** the spam path only logs the reason; it does **not** trash or
-  relabel your mail (keeps scopes to `readonly` + `compose`).
-
-## Files
-| File | Purpose |
+## Project structure
+| Path | Purpose |
 |------|---------|
-| `workflow.ipynb` | The agent (auth → helpers → LangGraph workflow → run). |
-| `.env.example` | Template for the repo-root `.env`. |
-| `credentials.json` | Your OAuth client (git-ignored, you add it). |
-| `token.json` | Cached OAuth token (git-ignored, auto-created). |
+| `app.py` | Chainlit UI — builds the ReAct agent, renders tool steps |
+| `agent_core.py` | Gmail service, helpers, LLM, the LangGraph `email_graph` |
+| `tools.py` | the 5 LangChain tools (`TOOLS`) |
+| `workflow.ipynb` | original notebook — the step-by-step teaching version |
+| `chainlit.md` | Chainlit welcome screen (must stay in root) |
+| `requirements.txt` | pinned deps (verified on Python 3.14) |
+| `docs/` | [UI_PLAN.md](docs/UI_PLAN.md) (UI design & prompts), [learning.md](docs/learning.md) (build journey) |
+
+## Docs
+- **[docs/UI_PLAN.md](docs/UI_PLAN.md)** — chat UI architecture, tool table, example prompts.
+- **[docs/learning.md](docs/learning.md)** — the build journey (Gmail MCP → direct API), gotchas, Cloud setup.
 
 ## Stack
-LangGraph · LangChain · Groq (`llama-3.3-70b-versatile`) · google-api-python-client ·
-Langfuse (optional) · Python 3.14
+LangGraph · LangChain · Groq · Chainlit · google-api-python-client · uv · Python 3.14
